@@ -1,18 +1,6 @@
-# Pico Shell (psh) — v2 with Command Anatomy
+# Pico Shell (psh)
 
-A Unix shell with job control, refactored to follow the **Command Anatomy** pattern from Chapter 2 of the course (`cmd_spec_t` + `argtable3` + command registry).
-
----
-
-## What Changed from Week 3
-
-| Week 3 (v1) | Week 3 + Chapter 2 (v2) |
-|---|---|
-| Built-ins handled by one big `builtin_cmd()` | Each built-in is its own module (`cmd_*.c`) |
-| `strcmp` for argument parsing | `argtable2/3` — structured parsing with error messages |
-| No `--help` support | Every command supports `-h` / `--help` |
-| No command listing | `help` command lists all registered commands |
-| Hard-coded dispatch in `eval()` | Registry lookup — add commands without touching `eval()` |
+A simple Unix shell with job control, written in C. Supports running programs, managing foreground and background jobs, and responding to keyboard signals like ctrl-c and ctrl-z.
 
 ---
 
@@ -20,13 +8,13 @@ A Unix shell with job control, refactored to follow the **Command Anatomy** patt
 
 ```
 picoshell/
-├── cmd_spec.h      ← The anatomy: cmd_spec_t struct + registry API
-├── registry.c      ← In-memory command registry implementation
+├── cmd_spec.h      ← Standard interface shared by all command modules
+├── registry.c      ← In-memory command registry
 ├── psh.c           ← Shell main loop, eval, signal handlers, job list
-├── cmd_quit.c      ← "quit" command module (cmd_spec_t + argtable)
+├── cmd_quit.c      ← "quit" command module
 ├── cmd_jobs.c      ← "jobs" command module
 ├── cmd_bgfg.c      ← "bg" and "fg" command modules
-├── cmd_help.c      ← "help" command module (uses registry)
+├── cmd_help.c      ← "help" command module
 ├── myspin.c        ← Test helper: sleep N seconds
 ├── mysplit.c       ← Test helper: fork child that sleeps N seconds
 ├── mystop.c        ← Test helper: sleep then send SIGTSTP to itself
@@ -38,57 +26,19 @@ picoshell/
 
 ---
 
-## Command Anatomy — the core idea
-
-Every command in this shell follows a standard shape defined in `cmd_spec.h`:
-
-```c
-typedef struct cmd_spec {
-    const char *name;         // "jobs"
-    const char *summary;      // one-line description for help listings
-    const char *long_help;    // full description shown by --help
-
-    int  (*run)(int argc, char **argv);   // argtable3 parses, logic runs
-    void (*print_usage)(FILE *out);       // help output — same argtable defs
-} cmd_spec_t;
-```
-
-Each command module defines **exactly one** `cmd_spec_t` and registers it at startup:
-
-```c
-// in main(), before the read/eval loop:
-registry_register(&cmd_quit_spec);
-registry_register(&cmd_jobs_spec);
-registry_register(&cmd_bg_spec);
-registry_register(&cmd_fg_spec);
-registry_register(&cmd_help_spec);
-```
-
-`eval()` then dispatches via the registry — no more hard-coded `if/else` chains:
-
-```c
-const cmd_spec_t *spec = registry_find(argv[0]);
-if (spec != NULL) {
-    spec->run(argc, argv);  // built-in: no fork needed
-    return;
-}
-// else: fork + execve for external programs
-```
-
----
-
 ## How to Build
 
-```bash
-make
-```
-
-Requires `libargtable2-dev` (or `libargtable3`):
+Install the required library first:
 ```bash
 sudo apt-get install libargtable2-dev
 ```
 
-Clean:
+Then build:
+```bash
+make
+```
+
+Clean compiled files:
 ```bash
 make clean
 ```
@@ -101,6 +51,13 @@ make clean
 ./psh
 ```
 
+You will see the prompt:
+```
+psh>
+```
+
+Type commands just like a normal shell. Press ctrl-D or type `quit` to exit.
+
 ---
 
 ## Built-in Commands
@@ -111,47 +68,28 @@ make clean
 | `jobs` | List all background and stopped jobs |
 | `bg <job>` | Resume a stopped job in the background |
 | `fg <job>` | Bring a job to the foreground |
-| `help` | List all registered commands |
+| `help` | List all built-in commands |
 | `help <cmd>` | Show detailed usage for a specific command |
 
 Every command also accepts `-h` / `--help`:
 ```
 psh> jobs --help
 psh> bg --help
-psh> help --help
+psh> quit --help
 ```
 
----
-
-## Adding a New Command
-
-To add a new command `foo`, you only need to:
-
-1. Create `cmd_foo.c` with:
-   - `build_foo_argtable()` — defines options once
-   - `foo_run()` — uses argtable to parse, then runs logic
-   - `foo_print_usage()` — uses same argtable to print help
-   - `cmd_foo_spec` — the `cmd_spec_t` descriptor
-
-2. Add one line to `main()` in `psh.c`:
-   ```c
-   registry_register(&cmd_foo_spec);
-   ```
-
-3. Add `cmd_foo.c` to `PSH_SRCS` in the Makefile.
-
-No changes needed to `eval()`, `builtin_cmd()`, or anything else.
+Jobs can be referred to by **JID** (e.g., `%1`) or **PID** (e.g., `9721`).
 
 ---
 
-## Signal Handling (unchanged from Week 3)
+## Signal Handling
 
 | Key | Signal | Effect |
 |---|---|---|
 | ctrl-c | SIGINT | Terminates the current foreground job |
 | ctrl-z | SIGTSTP | Stops the current foreground job |
 
-Signals are forwarded to the foreground job's **process group** (`kill(-pid, sig)`), so child processes of the job are also affected.
+Signals are forwarded to the foreground job's entire process group so all child processes are also affected.
 
 ---
 
@@ -174,16 +112,35 @@ Type '<command> --help' for detailed usage.
 
 psh> ./myspin 3 &
 [1] (1234) ./myspin 3 &
+psh> ./myspin 5 &
+[2] (1235) ./myspin 5 &
 psh> jobs
 [1] (1234) Running  ./myspin 3 &
+[2] (1235) Running  ./myspin 5 &
 psh> fg %1
+Job [1] (1234) stopped by signal: Stopped
+psh> bg %1
+[1] (1234) ./myspin 3 &
 psh> quit
 ```
 
 ---
 
+## Design Notes
+
+### Process group isolation
+Each child process calls `setpgid(0, 0)` after `fork()` and before `execve()`. This puts the child in its own process group so ctrl-c and ctrl-z only affect the child, not the shell itself.
+
+### Preventing race conditions
+`SIGCHLD` is blocked using `sigprocmask` before `fork()`. The parent calls `addjob()` before unblocking. This guarantees the signal handler can never delete a job before it has been added.
+
+### Modular command structure
+Each built-in command is its own `.c` file with its own argument parsing and help text. Commands are registered at startup and looked up by name at runtime — no hard-coded if/else chains.
+
+---
+
 ## Limitations
 
-- No pipes (`|`) or I/O redirection (`<`, `>`)
+- No support for pipes (`|`) or I/O redirection (`<`, `>`)
 - Maximum 16 concurrent jobs
-- Do not run interactive programs (`vi`, `emacs`, `less`) from this shell
+- Do not run interactive programs like `vi`, `emacs`, or `less` from this shell

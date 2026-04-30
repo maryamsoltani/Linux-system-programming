@@ -1,9 +1,6 @@
-# AGENT.md — Pico Shell v2 Implementation Guide
+# AGENT.md — Pico Shell Implementation Guide
 
-This document explains every file in the project, how they connect, and
-why each design decision was made. It covers both the original Week 3
-shell (process control + signals) and the Chapter 2 refactor
-(cmd_spec_t + argtable + registry).
+This document explains every file in the project, how they connect, and why each design decision was made.
 
 ---
 
@@ -43,9 +40,9 @@ shell (process control + signals) and the Chapter 2 refactor
 
 ## File-by-File Walkthrough
 
-### `cmd_spec.h` — the anatomy contract
+### `cmd_spec.h` — the standard interface
 
-This is the most important file. It defines:
+Defines the struct that every command module must implement:
 
 ```c
 typedef struct cmd_spec {
@@ -57,11 +54,9 @@ typedef struct cmd_spec {
 } cmd_spec_t;
 ```
 
-Every command in the shell must provide exactly one `cmd_spec_t`.
-This is what the notebook calls the "anatomy" — a standard shape that
-makes all commands interchangeable, self-documenting, and registerable.
+Every command provides exactly one `cmd_spec_t`. This makes all commands interchangeable, self-documenting, and registerable without touching the shell core.
 
-Also defines:
+Also declares:
 - `registry_register()` — add a spec
 - `registry_find()` — look up by name
 - `registry_list()` — print all commands (used by `help`)
@@ -86,19 +81,19 @@ At shell startup, `main()` calls `registry_register()` for every built-in.
 
 ### `psh.c` — shell core
 
-The main shell file. Compared to Week 3, three things changed:
+Three key parts:
 
-**1. `eval()` now uses the registry:**
+**1. `eval()` dispatches through the registry:**
 ```c
 const cmd_spec_t *spec = registry_find(argv[0]);
 if (spec != NULL) {
     spec->run(argc, argv);  // no fork for built-ins
     return;
 }
-// fork + execve for external programs (unchanged)
+// fork + execve for external programs
 ```
 
-**2. `main()` registers all specs:**
+**2. `main()` registers all specs at startup:**
 ```c
 registry_register(&cmd_quit_spec);
 registry_register(&cmd_jobs_spec);
@@ -112,100 +107,83 @@ registry_register(&cmd_help_spec);
 void listjobs_external(FILE *out);   // called by cmd_jobs.c
 void do_bgfg_external(char **argv);  // called by cmd_bgfg.c
 ```
-This keeps the job list private to `psh.c` while letting the command
-modules use it without needing to know the struct layout.
 
-Everything else (signal handlers, job list helpers, parseline, waitfg)
-is identical to Week 3.
+Everything else — signal handlers, job list helpers, parseline, waitfg — is standard Unix shell implementation.
 
 ---
 
-### `cmd_quit.c` — the simplest anatomy example
+### `cmd_quit.c` — simplest command example
 
 Shows the full pattern with minimal complexity:
 
 ```c
-// Step 1: one argtable builder — SINGLE SOURCE OF TRUTH
+// Step 1: one argtable builder — single source of truth for options
 static void build_quit_argtable(
     struct arg_lit **help,
     struct arg_end **end,
-    void ***argtable_out)
-{
-    *help = arg_lit0("h", "help", "show this help message and exit");
-    *end  = arg_end(10);
-    // ... assemble array ...
-}
+    void ***argtable_out) { ... }
 
 // Step 2: print_usage calls the builder
-void quit_print_usage(FILE *out) {
-    // calls build_quit_argtable, then arg_print_syntax + arg_print_glossary
-}
+void quit_print_usage(FILE *out) { ... }
 
-// Step 3: run calls the builder, parses, then runs logic
-int quit_run(int argc, char **argv) {
-    // calls build_quit_argtable, then arg_parse
-    // handles --help, handles errors, then: exit(0)
-}
+// Step 3: run calls the builder, parses, runs logic
+int quit_run(int argc, char **argv) { ... }
 
 // Step 4: the spec descriptor
 const cmd_spec_t cmd_quit_spec = {
     .name        = "quit",
     .summary     = "exit the shell",
-    .long_help   = "...",
+    .long_help   = "Terminate the psh shell session immediately.",
     .run         = quit_run,
     .print_usage = quit_print_usage,
 };
 ```
 
-This is the template for every command. Copy it and change the logic.
+Copy this pattern for every new command you add.
 
 ---
 
-### `cmd_jobs.c` — anatomy with an external dependency
+### `cmd_jobs.c` — command with external dependency
 
 Same pattern as `cmd_quit.c`, but `jobs_run()` needs the job list.
-Since the job list lives in `psh.c`, we use a bridge function:
+Since the job list lives in `psh.c`, a bridge function is used:
 
 ```c
-extern void listjobs_external(FILE *out);  // defined in psh.c
+extern void listjobs_external(FILE *out);
 
 int jobs_run(int argc, char **argv) {
-    // ... parse args ...
-    listjobs_external(stdout);  // delegates to psh.c
+    // parse args ...
+    listjobs_external(stdout);
     return 0;
 }
 ```
 
-This is the clean way to share state between the shell core and
-command modules without exposing the entire `jobs[]` array.
+This keeps the job list private to `psh.c` while letting command modules use it.
 
 ---
 
 ### `cmd_bgfg.c` — two commands sharing one argtable
 
-`bg` and `fg` take exactly the same arguments, so they share
-one `build_bgfg_argtable()` builder. The logic differs only in
-whether the job gets state BG or FG. One shared function handles both:
+`bg` and `fg` take the same arguments so they share one argtable builder.
+The logic differs only in whether the job becomes BG or FG:
 
 ```c
 static int bgfg_run(const char *cmd, int argc, char **argv) {
     // parse with shared argtable
-    // call do_bgfg_external() with reconstructed argv
+    // call do_bgfg_external()
 }
 
 int bg_run(int argc, char **argv) { return bgfg_run("bg", argc, argv); }
 int fg_run(int argc, char **argv) { return bgfg_run("fg", argc, argv); }
 ```
 
-Two separate `cmd_spec_t` are exported (`cmd_bg_spec`, `cmd_fg_spec`),
-but the implementation is shared. This is a good pattern whenever two
-commands are very similar.
+Two separate `cmd_spec_t` structs are exported but the implementation is shared.
 
 ---
 
-### `cmd_help.c` — the anatomy in action
+### `cmd_help.c` — help system
 
-This command proves the whole system works. It has two modes:
+Two modes:
 
 **No argument** — calls `registry_list()`:
 ```
@@ -225,23 +203,21 @@ Usage: bg [-h] %job|pid
 ...
 ```
 
-The documentation comes entirely from the `cmd_spec_t` structs —
-no separate man pages or help strings to maintain.
+Documentation is auto-derived from the `cmd_spec_t` structs — no separate help strings to maintain.
 
 ---
 
-## argtable2/3 Quick Reference
+## argtable2 Quick Reference
 
 | Function | What it creates |
 |---|---|
 | `arg_lit0("h","help","desc")` | optional `-h`/`--help` flag |
-| `arg_lit1("v","verbose","desc")` | required `-v`/`--verbose` flag |
 | `arg_str0(NULL,NULL,"name","desc")` | optional positional string arg |
 | `arg_str1(NULL,NULL,"name","desc")` | required positional string arg |
 | `arg_file0(NULL,NULL,"file","desc")` | optional file path argument |
-| `arg_end(20)` | error collector (always last) |
+| `arg_end(20)` | error collector — always last |
 | `arg_parse(argc,argv,argtable)` | parse — returns error count |
-| `arg_print_syntax(out,argtable,"\n")` | print `Usage: cmd [-h] ...` line |
+| `arg_print_syntax(out,argtable,"\n")` | print usage line |
 | `arg_print_glossary(out,argtable,"  %-20s %s\n")` | print options table |
 | `arg_print_errors(out,end,"cmd")` | print parse error messages |
 
@@ -249,21 +225,15 @@ no separate man pages or help strings to maintain.
 
 ## How to Add a New Command
 
-1. Create `cmd_foo.c`:
+**Step 1** — create `cmd_foo.c`:
 ```c
 #include <argtable2.h>
 #include "cmd_spec.h"
-extern const cmd_spec_t cmd_foo_spec;  /* forward decl */
+extern const cmd_spec_t cmd_foo_spec;
 
-static void build_foo_argtable(...) { /* define your options */ }
-
-void foo_print_usage(FILE *out) {
-    /* call build_foo_argtable, then arg_print_syntax + arg_print_glossary */
-}
-
-int foo_run(int argc, char **argv) {
-    /* call build_foo_argtable, arg_parse, handle --help + errors, run logic */
-}
+static void build_foo_argtable(...) { /* define options */ }
+void foo_print_usage(FILE *out)     { /* use builder */ }
+int  foo_run(int argc, char **argv) { /* parse + logic */ }
 
 const cmd_spec_t cmd_foo_spec = {
     .name = "foo", .summary = "...", .long_help = "...",
@@ -271,33 +241,33 @@ const cmd_spec_t cmd_foo_spec = {
 };
 ```
 
-2. In `psh.c` `main()`, add:
+**Step 2** — in `psh.c` `main()`, add:
 ```c
 registry_register(&cmd_foo_spec);
 ```
 
-3. In `Makefile`, add `cmd_foo.c` to `PSH_SRCS`.
+**Step 3** — in `Makefile`, add `cmd_foo.c` to `PSH_SRCS`.
 
-4. Run `make`. Done.
+**Step 4** — run `make`. Done.
 
 ---
 
 ## Testing Checklist
 
 ```bash
-# All original Week 3 tests
-echo "./bogus" | ./psh               # Command not found
-echo "./myspin 1" | ./psh            # Foreground job
+# Basic shell tests
+echo "./bogus" | ./psh                        # Command not found
+echo "./myspin 1" | ./psh                     # Foreground job
 printf "./myspin 2 &\njobs\nquit\n" | ./psh   # Background + jobs list
-echo "./myint 1"  | ./psh            # SIGINT termination message
-printf "./mystop 1\njobs\nquit\n" | ./psh     # SIGTSTP stop message
+echo "./myint 1"  | ./psh                     # SIGINT termination message
+printf "./mystop 1\njobs\nquit\n" | ./psh     # SIGTSTP stop + jobs list
 
-# New Chapter 2 tests
-printf "help\nquit\n" | ./psh        # Registry listing
-printf "help jobs\nquit\n" | ./psh   # Per-command help via anatomy
-printf "help bg\nquit\n" | ./psh     # bg help with examples
-printf "quit --help\n" | ./psh       # --help flag on any command
-printf "bg\nquit\n" | ./psh          # argtable error message for missing arg
+# Help system tests
+printf "help\nquit\n" | ./psh                 # List all commands
+printf "help jobs\nquit\n" | ./psh            # Per-command help
+printf "help bg\nquit\n" | ./psh              # bg help with examples
+printf "quit --help\n" | ./psh                # --help flag
+printf "bg\nquit\n" | ./psh                   # Error for missing argument
 ```
 
 ---
@@ -306,7 +276,8 @@ printf "bg\nquit\n" | ./psh          # argtable error message for missing arg
 
 | Mistake | Fix |
 |---|---|
-| `print_usage` references `cmd_foo_spec` before it's defined | Add `extern const cmd_spec_t cmd_foo_spec;` at top of file |
+| `print_usage` references spec before it is defined | Add `extern const cmd_spec_t cmd_foo_spec;` at top of file |
 | Forgetting `-largtable2` in Makefile | Add `LIBS = -largtable2` and use `$(LIBS)` in link step |
 | Calling `waitpid` in `waitfg` | Keep `waitpid` only in `sigchld_handler`; use sleep loop in `waitfg` |
 | Not blocking SIGCHLD before fork | Wrap `fork` + `addjob` with `sigprocmask(SIG_BLOCK/UNBLOCK)` |
+| Not calling `setpgid(0,0)` in child | ctrl-c kills the shell too — call it before `execve` |
