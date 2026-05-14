@@ -1,9 +1,0 @@
-Usage: hello [-h] [-n NAME] [--json]
-
-Print "Hello, World!" or greet a specific name.
-Use --json to wrap output as {"message":"..."}.
-
-Options:
-  -n, --name=NAME        name to greet (default: World)
-  --json                 output JSON {message: "..."}
-  -h, --help             display this help and exit
