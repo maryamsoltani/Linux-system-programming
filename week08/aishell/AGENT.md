@@ -1,14 +1,20 @@
-# AGENT.md — AiShell Week 06: BusyBox-Style Shell
+# AGENT.md — AiShell Week 08: Socket Client + MCP Server
 
-This file is written for an AI assistant working on this project.
+This file is written for an AI assistant working on this codebase.
 Read it before writing, refactoring, or extending any code here.
+
+See also `../AGENT.md` for the full week08 project (aishell + MCP server + agent notebook).
 
 ---
 
 ## What this project is
 
-Week 06 builds a BusyBox-inspired shell where one binary (`aishell`) contains
-many Unix-style commands dispatched through a shared registry. It demonstrates:
+Week 08 extends the Week 06 BusyBox-inspired shell (`aishell`) with:
+- **`net-get`** — TCP socket client command (`socket→connect→send/recv→close`)
+- **`mcp_server`** — fork-per-client JSON tool server on TCP port 9000
+
+The original shell (`aishell`) contains many Unix-style commands dispatched
+through a shared registry. It demonstrates:
 
 - A command registry pattern (register → find → dispatch)
 - Process creation and IPC: `fork()`, `execvp()`, `pipe()`, `dup2()`, `waitpid()`
@@ -21,15 +27,25 @@ many Unix-style commands dispatched through a shared registry. It demonstrates:
 ## Repository layout
 
 ```
-week06/
+week08/aishell/
 ├── main.c                    REPL, line editor, history, tab completion,
 │                             pipeline dispatch, @ NL interface
 ├── cmd_spec.h                cmd_spec_t typedef — the contract every command must fulfill
 ├── registry.c                static array of cmd_spec_t*, register/find/iterate
 ├── register_all_commands.c   calls register_*_command() for every built-in
 ├── json_utils.h / .c         json_print_string(), json_print_escaped_char()
-└── cmd_<name>.h / .c         one module per command (23 total)
+├── cmd_netget.h / .c         NEW — net-get TCP socket client command
+├── mcp_server.c              NEW — JSON tool server, fork-per-client, port 9000
+└── cmd_<name>.h / .c         23 original built-in commands
 ```
+
+### Week 08 new files
+
+| File | Purpose |
+|------|---------|
+| `cmd_netget.c` | HTTP GET via raw socket; flags: `--port`, `--path`, `--timeout`, `--headers`, `--json` |
+| `cmd_netget.h` | Header declaring `netget_run`, `netget_print_usage`, `register_netget_command` |
+| `mcp_server.c` | Stand-alone binary: accept loop → fork → parse JSON → dispatch command → return JSON |
 
 ---
 
@@ -163,6 +179,18 @@ waits for each in order. Results are printed after all threads finish.
 
 `pkg.json` is parsed with simple `strstr` pattern matching — no JSON library.
 It must contain `"name"`, `"version"`, and `"files"` keys.
+
+---
+
+## Makefile targets (week08)
+
+| Target | Binary | Sources |
+|--------|--------|---------|
+| `aishell` | interactive shell | `main.c` + all `cmd_*.c` |
+| `mcp_server` | JSON tool server | `mcp_server.c` + all `cmd_*.c` |
+
+When adding a new command, add `cmd_myname.c` to **both** `SRC` and `MCP_SRC`
+in the Makefile so both binaries include it.
 
 ---
 
