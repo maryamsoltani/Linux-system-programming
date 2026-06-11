@@ -5,6 +5,71 @@ Read it before writing, refactoring, or extending any code here.
 
 ---
 
+## How to build and run
+
+### FTP server
+
+```bash
+# 1. Build
+cd week09/ftpd
+make
+
+# 2. Run (reads ftpd.conf from the current directory)
+./ftpd
+
+# 3. Connect with the standard Linux FTP client
+ftp 127.0.0.1 21021
+# Enter any username and password when prompted
+
+# 4. Example FTP session
+ftp> mkdir testdir        # create a directory
+ftp> put /etc/hostname    # upload a file (STOR)
+ftp> get hostname         # download the file (RETR)
+ftp> ls                   # list home directory
+ftp> ls /                 # list FTP root (same as home)
+ftp> ls testdir           # list a subdirectory
+ftp> quit                 # close connection (server keeps running)
+
+# 5. Stop the server
+kill %1    # or Ctrl-C if running in the foreground
+```
+
+### MCP agent notebook
+
+```bash
+# 1. Open the notebook
+cd week09
+jupyter notebook agent/week09_mcp_agent.ipynb
+
+# 2. Run all cells — they write /mnt/data/server.c and /mnt/data/client.py
+
+# 3. Compile and start the MCP server
+cd /mnt/data
+gcc server.c -o mcp_server && ./mcp_server &
+
+# 4. Run the Python client
+python3 client.py
+
+# 5. Call the mocked agent (inside the notebook)
+agent_flow('List all source files in the current directory')
+agent_flow('What time is it on the server?')
+```
+
+### Adjusting configuration
+
+Edit `week09/ftpd/ftpd.conf` then restart `ftpd` to apply:
+
+```ini
+port        = 21021   # change the control port
+allow_stor  = 0       # disable file uploads
+allow_retr  = 0       # disable file downloads
+allow_list  = 0       # disable directory listing
+allow_mkd   = 0       # disable mkdir
+max_file_kb = 1024    # cap uploads at 1 MB
+```
+
+---
+
 ## What this project is
 
 Week 09 builds the server side of socket programming.
