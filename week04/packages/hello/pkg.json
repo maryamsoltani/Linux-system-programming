@@ -1,0 +1,7 @@
+{
+  "name": "hello",
+  "version": "3.0.0",
+  "category": "shell",
+  "summary": "Print a greeting message",
+  "description": "Print \"Hello, World!\" or greet a specific name.\nUse --json to wrap output as {\"message\":\"...\"}."
+}

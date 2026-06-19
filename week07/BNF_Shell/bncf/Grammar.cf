@@ -1,0 +1,46 @@
+-- Mini-Shell Grammar (BNFC)
+-- Supports: commands, pipelines, I/O redirection, background jobs,
+--           variable references ($VAR), and quoted strings.
+
+entrypoints Input ;
+
+-- Top-level: one or more jobs separated by ';'
+StartInput. Input ::= [Job] ;
+separator nonempty Job ";" ;
+
+-- Jobs: foreground or background
+OneJobFG. Job ::= CommandLine ;
+OneJobBG. Job ::= CommandLine "&" ;
+
+-- Command line: pipeline + optional redirection
+MkCmdLine. CommandLine ::= Pipeline OptRedir ;
+
+-- Optional I/O redirection
+NoRedir.    OptRedir ::= ;
+OutRedir.   OptRedir ::= ">" Atom ;
+InRedir.    OptRedir ::= "<" Atom ;
+InOutRedir. OptRedir ::= "<" Atom ">" Atom ;
+OutInRedir. OptRedir ::= ">" Atom "<" Atom ;
+
+-- Pipeline: one or more command parts connected by '|'
+Single. Pipeline ::= CommandPart ;
+Pipe.   Pipeline ::= CommandPart "|" Pipeline ;
+
+-- Command part: command name followed by zero or more arguments
+Cmd. CommandPart ::= Atom [Atom] ;
+separator Atom "" ;
+
+-- Atom: a single word, a $VARIABLE reference, or a quoted string
+AWord.   Atom ::= Word ;
+AVar.    Atom ::= VarRef ;
+AQuoted. Atom ::= String ;
+
+-- Token definitions
+
+-- VarRef matches $NAME or $name
+token VarRef '$' (letter | '_') (letter | digit | '_')* ;
+
+-- Word: letters, digits, and shell-safe punctuation.
+-- Each special character is listed explicitly as a single-char alternative.
+token Word (letter | digit | '_' | '-' | '.' | '/' | ':' | '~' | '@' | '*' | '?' | '!' | '+' | '=' | '%')
+           (letter | digit | '_' | '-' | '.' | '/' | ':' | '~' | '@' | '*' | '?' | '!' | '+' | '=' | '%')* ;
